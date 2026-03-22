@@ -300,6 +300,149 @@ if Code.ensure_loaded?(Postgrex) do
       ]
     end
 
+    @impl true
+    def merge(prefix, table, header, rows, on, when_matched, on_not_matched, returning, placeholders, opts) do
+      counter_offset = length(placeholders) + 1
+      header_types = Keyword.get(opts, :header_types, %{})
+
+      values = merge_values(rows, counter_offset, header, header_types)
+      column_defs = quote_names(header)
+
+      on_clause =
+        Enum.map_intersperse(on, " AND ", fn col ->
+          quoted = quote_name(col)
+          ["t.", quoted, " = v." | quoted]
+        end)
+
+      matched_clauses = Enum.map(when_matched, &merge_when_matched/1)
+
+      not_matched_clause = merge_when_not_matched(on_not_matched, header)
+
+      [
+        "MERGE INTO ",
+        quote_name(prefix, table),
+        " AS t USING (VALUES ",
+        values,
+        ") AS v(",
+        column_defs,
+        ") ON ",
+        on_clause,
+        matched_clauses,
+        not_matched_clause
+        | merge_returning(returning)
+      ]
+    end
+
+    defp merge_when_matched({condition, :do_nothing}) do
+      [" WHEN MATCHED", merge_condition(condition), " THEN DO NOTHING"]
+    end
+
+    defp merge_when_matched({condition, {:update, value_cols, update_query}}) do
+      {update_set_from_values, _} =
+        intersperse_reduce(value_cols, ", ", nil, fn col, acc ->
+          quoted = quote_name(col)
+          {[quoted, " = v." | quoted], acc}
+        end)
+
+      update_set_exprs =
+        case update_query do
+          {query, _params, _} ->
+            sources = create_names(query, [])
+            {expr, _name, schema} = elem(sources, 0)
+            sources = put_elem(sources, 0, {expr, "t", schema})
+            expr_fields = update_fields(query, sources)
+            if expr_fields == [], do: [], else: [", " | expr_fields]
+
+          nil ->
+            []
+        end
+
+      [
+        " WHEN MATCHED",
+        merge_condition(condition),
+        " THEN UPDATE SET ",
+        update_set_from_values
+        | update_set_exprs
+      ]
+    end
+
+    defp merge_when_not_matched(nil, _header), do: []
+    defp merge_when_not_matched(:do_nothing, _header), do: [" WHEN NOT MATCHED THEN DO NOTHING"]
+
+    defp merge_when_not_matched({:insert, cols}, _header) do
+      col_names = quote_names(cols)
+
+      values =
+        Enum.map_intersperse(cols, ", ", fn col ->
+          ["v." | quote_name(col)]
+        end)
+
+      [" WHEN NOT MATCHED THEN INSERT (", col_names, ") VALUES (", values, ?)]
+    end
+
+    # TODO: support planned query expressions as conditions via dynamic/2
+    defp merge_condition(nil), do: []
+    defp merge_condition({:unsafe_fragment, fragment}), do: [" AND " | fragment]
+
+    defp merge_returning([]), do: []
+
+    defp merge_returning({:unsafe_fragment, fragment}),
+      do: [" RETURNING ", fragment]
+
+    defp merge_returning(returning) do
+      cols =
+        Enum.map_intersperse(returning, ", ", fn col ->
+          quoted = quote_name(col)
+          ["t." | quoted]
+        end)
+
+      [" RETURNING " | cols]
+    end
+
+    defp merge_values(rows, counter, header, header_types) do
+      case rows do
+        [first_row | rest] ->
+          # Cast the first row so Postgres can infer column types for the VALUES clause
+          {first_row_sql, counter} = merge_first_row(first_row, counter, header, header_types)
+          first = [?(, first_row_sql, ?)]
+
+          if rest == [] do
+            first
+          else
+            {rest_sql, _} =
+              intersperse_reduce(rest, ?,, counter, fn row, counter ->
+                {row, counter} = insert_each(row, counter)
+                {[?(, row, ?)], counter}
+              end)
+
+            [first, ?, | rest_sql]
+          end
+
+        [] ->
+          []
+      end
+    end
+
+    defp merge_first_row(row, counter, header, header_types) do
+      type_list = Enum.map(header, fn col -> Map.get(header_types, col) end)
+
+      intersperse_reduce(Enum.zip(row, type_list), ?,, counter, fn
+        {nil, _type}, counter ->
+          {"DEFAULT", counter}
+
+        {{%Ecto.Query{} = query, params_counter}, _type}, counter ->
+          {[?(, all(query), ?)], counter + params_counter}
+
+        {{:placeholder, placeholder_index}, _type}, counter ->
+          {[?$ | placeholder_index], counter}
+
+        {_, type}, counter ->
+          param = [?$ | Integer.to_string(counter)]
+          cast = if type, do: [param, "::" | ecto_to_db(type)], else: param
+          {cast, counter + 1}
+      end)
+    end
+
     defp insert_all(query = %Ecto.Query{}, _counter) do
       [?(, all(query), ?)]
     end

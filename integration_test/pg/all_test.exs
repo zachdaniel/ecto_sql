@@ -17,3 +17,4 @@ Code.require_file "../sql/sql.exs", __DIR__
 Code.require_file "../sql/stream.exs", __DIR__
 Code.require_file "../sql/subquery.exs", __DIR__
 Code.require_file "../sql/transaction.exs", __DIR__
+Code.require_file "../sql/merge.exs", __DIR__

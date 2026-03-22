@@ -121,6 +121,28 @@ defmodule Ecto.Adapters.SQL.Connection do
             ) :: iodata
 
   @doc """
+  Returns a MERGE statement for the given `rows` in `table`.
+
+  The `on` columns are used for matching (ON clause).
+  `when_matched` is a list of `{condition, action}` clauses.
+  `on_not_matched` is `{:insert, cols}`, `:do_nothing`, or `nil`.
+  """
+  @callback merge(
+              prefix :: String.t(),
+              table :: String.t(),
+              header :: [atom],
+              rows :: [[atom | nil]],
+              on :: [atom],
+              when_matched :: [Ecto.Adapter.Schema.when_matched_clause()],
+              on_not_matched :: Ecto.Adapter.Schema.on_not_matched(),
+              returning :: [atom],
+              placeholders :: [term],
+              opts :: Keyword.t()
+            ) :: iodata
+
+  @optional_callbacks [merge: 10]
+
+  @doc """
   Executes an EXPLAIN query or similar depending on the adapter to obtains statistics of the given query.
 
   Receives the `connection`, `query`, `params` for the query,

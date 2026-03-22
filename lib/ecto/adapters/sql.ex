@@ -213,6 +213,34 @@ defmodule Ecto.Adapters.SQL do
       end
 
       @impl true
+      def merge_all(
+            adapter_meta,
+            schema_meta,
+            header,
+            rows,
+            on,
+            when_matched,
+            on_not_matched,
+            returning,
+            placeholders,
+            opts
+          ) do
+        Ecto.Adapters.SQL.merge_all(
+          adapter_meta,
+          schema_meta,
+          @conn,
+          header,
+          rows,
+          on,
+          when_matched,
+          on_not_matched,
+          returning,
+          placeholders,
+          opts
+        )
+      end
+
+      @impl true
       def insert(adapter_meta, schema_meta, params, on_conflict, returning, opts) do
         %{source: source, prefix: prefix} = schema_meta
         {kind, conflict_params, _} = on_conflict
@@ -1003,6 +1031,48 @@ defmodule Ecto.Adapters.SQL do
         end
       end)
     end)
+  end
+
+  @doc false
+  def merge_all(
+        adapter_meta,
+        schema_meta,
+        conn,
+        header,
+        rows,
+        on,
+        when_matched,
+        on_not_matched,
+        returning,
+        placeholders,
+        opts
+      ) do
+    %{source: source, prefix: prefix} = schema_meta
+
+    {rows, params} = unzip_inserts(header, rows)
+
+    # Collect dump_params from all update_query expressions in when_matched clauses
+    update_params =
+      Enum.flat_map(when_matched, fn
+        {_condition, {:update, _cols, {_query, dump_params, _}}} -> dump_params
+        _ -> []
+      end)
+
+    sql = conn.merge(prefix, source, header, rows, on, when_matched, on_not_matched, returning, placeholders, opts)
+
+    opts =
+      if is_nil(Keyword.get(opts, :cache_statement)) do
+        [{:cache_statement, "ecto_merge_all_#{source}"} | opts]
+      else
+        opts
+      end
+
+    all_params = placeholders ++ Enum.reverse(params) ++ update_params
+
+    # TODO: Postgrex does not yet parse the "MERGE N" command tag,
+    # so num_rows will be 0 when RETURNING is not used.
+    %{num_rows: num, rows: rows} = query!(adapter_meta, sql, all_params, [source: source] ++ opts)
+    {num, rows}
   end
 
   @doc false
