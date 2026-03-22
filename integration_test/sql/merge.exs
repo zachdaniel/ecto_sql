@@ -244,6 +244,40 @@ defmodule Ecto.Integration.MergeTest do
       assert post.visits == 1
     end
 
+    test "delete matched rows" do
+      TestRepo.insert!(%Post{title: "delete me", visits: 1})
+      TestRepo.insert!(%Post{title: "keep me", visits: 2})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      # Only pass id1 — it gets deleted, id2 is untouched
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id1, title: "delete me", visits: 1}
+        ], on: [:id], when_matched: [:delete])
+
+      posts = TestRepo.all(Post)
+      assert [%{id: ^id2, title: "keep me"}] = posts
+    end
+
+    test "conditional delete with dynamic" do
+      TestRepo.insert!(%Post{title: "low", visits: 3})
+      TestRepo.insert!(%Post{title: "high", visits: 30})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      # Delete matched rows where source visits < 10, update the rest
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id1, title: "low", visits: 3},
+          %{id: id2, title: "high updated", visits: 30}
+        ], on: [:id], when_matched: [
+          {dynamic([v], v.visits < 10), :delete},
+          {nil, update: [:title]}
+        ])
+
+      posts = TestRepo.all(Post)
+      assert [%{id: ^id2, title: "high updated"}] = posts
+    end
+
     test "insert-only merge using do_nothing + on_not_matched" do
       TestRepo.insert!(%Post{title: "existing", visits: 1})
       [%{id: id}] = TestRepo.all(from p in Post, select: p)

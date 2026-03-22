@@ -337,6 +337,10 @@ if Code.ensure_loaded?(Postgrex) do
       [" WHEN MATCHED", merge_condition(condition), " THEN DO NOTHING"]
     end
 
+    defp merge_when_matched({condition, :delete}) do
+      [" WHEN MATCHED", merge_condition(condition), " THEN DELETE"]
+    end
+
     defp merge_when_matched({condition, {:update, value_cols, update_query}}) do
       {update_set_from_values, _} =
         intersperse_reduce(value_cols, ", ", nil, fn col, acc ->
