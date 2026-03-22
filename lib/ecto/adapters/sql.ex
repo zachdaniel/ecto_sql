@@ -1054,23 +1054,13 @@ defmodule Ecto.Adapters.SQL do
     # Collect dump_params from conditions and update_queries in clause order.
     # Within each clause: condition params come before update params.
     clause_params =
-      Enum.flat_map(when_matched, fn clause ->
-        {condition, action} = clause
+      Enum.flat_map(when_matched, &collect_clause_params/1)
 
-        condition_params =
-          case condition do
-            {:planned, _query, dump_params} -> dump_params
-            _ -> []
-          end
-
-        update_params =
-          case action do
-            {:update, _cols, {_query, dump_params, _}} -> dump_params
-            _ -> []
-          end
-
-        condition_params ++ update_params
-      end)
+    not_matched_by_source_params =
+      case Keyword.get(opts, :on_not_matched_by_source) do
+        nil -> []
+        clauses -> Enum.flat_map(clauses, &collect_clause_params/1)
+      end
 
     sql = conn.merge(prefix, source, header, rows, on, when_matched, on_not_matched, returning, placeholders, opts)
 
@@ -1081,12 +1071,29 @@ defmodule Ecto.Adapters.SQL do
         opts
       end
 
-    all_params = placeholders ++ Enum.reverse(params) ++ clause_params
+    all_params = placeholders ++ Enum.reverse(params) ++ clause_params ++ not_matched_by_source_params
 
     # TODO: Postgrex does not yet parse the "MERGE N" command tag,
     # so num_rows will be 0 when RETURNING is not used.
     %{num_rows: num, rows: rows} = query!(adapter_meta, sql, all_params, [source: source] ++ opts)
     {num, rows}
+  end
+
+  defp collect_clause_params({condition, action}) do
+    condition_params =
+      case condition do
+        {:planned, _query, dump_params} -> dump_params
+        _ -> []
+      end
+
+    update_params =
+      case action do
+        {:update, _cols, {_query, dump_params, _}} -> dump_params
+        {:update, {_query, dump_params, _}} -> dump_params
+        _ -> []
+      end
+
+    condition_params ++ update_params
   end
 
   @doc false

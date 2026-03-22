@@ -318,6 +318,12 @@ if Code.ensure_loaded?(Postgrex) do
 
       not_matched_clause = merge_when_not_matched(on_not_matched, header)
 
+      not_matched_by_source_clauses =
+        case Keyword.get(opts, :on_not_matched_by_source) do
+          nil -> []
+          clauses when is_list(clauses) -> Enum.map(clauses, &merge_when_not_matched_by_source/1)
+        end
+
       [
         "MERGE INTO ",
         quote_name(prefix, table),
@@ -328,7 +334,8 @@ if Code.ensure_loaded?(Postgrex) do
         ") ON ",
         on_clause,
         matched_clauses,
-        not_matched_clause
+        not_matched_clause,
+        not_matched_by_source_clauses
         | merge_returning(returning)
       ]
     end
@@ -382,6 +389,45 @@ if Code.ensure_loaded?(Postgrex) do
         end)
 
       [" WHEN NOT MATCHED THEN INSERT (", col_names, ") VALUES (", values, ?)]
+    end
+
+    defp merge_when_not_matched_by_source({condition, :do_nothing}) do
+      [" WHEN NOT MATCHED BY SOURCE", merge_condition_target(condition), " THEN DO NOTHING"]
+    end
+
+    defp merge_when_not_matched_by_source({condition, :delete}) do
+      [" WHEN NOT MATCHED BY SOURCE", merge_condition_target(condition), " THEN DELETE"]
+    end
+
+    defp merge_when_not_matched_by_source({condition, {:update, update_query}}) do
+      update_set =
+        case update_query do
+          {query, _params, _} ->
+            sources = create_names(query, [])
+            {expr, _name, schema} = elem(sources, 0)
+            sources = put_elem(sources, 0, {expr, "t", schema})
+            update_fields(query, sources)
+
+          nil ->
+            []
+        end
+
+      [" WHEN NOT MATCHED BY SOURCE", merge_condition_target(condition), " THEN UPDATE SET " | update_set]
+    end
+
+    # Conditions for NOT MATCHED BY SOURCE reference the target table (t), not source (v)
+    defp merge_condition_target(nil), do: []
+    defp merge_condition_target({:unsafe_fragment, fragment}), do: [" AND " | fragment]
+
+    defp merge_condition_target({:planned, query, _dump_params}) do
+      sources = create_names(query, [])
+      {expr, _name, schema} = elem(sources, 0)
+      sources = put_elem(sources, 0, {expr, "t", schema})
+
+      case query.wheres do
+        [] -> []
+        wheres -> boolean(" AND", wheres, sources, query)
+      end
     end
 
     defp merge_condition(nil), do: []

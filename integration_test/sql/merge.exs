@@ -439,4 +439,78 @@ defmodule Ecto.Integration.MergeTest do
       assert [%{title: "row1", visits: 15}, %{title: "row2", visits: 0}] = posts
     end
   end
+
+  describe "on_not_matched_by_source" do
+    test "delete target rows not in source" do
+      TestRepo.insert!(%Post{title: "keep", visits: 1})
+      TestRepo.insert!(%Post{title: "remove", visits: 2})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      # Only id1 is in the source — id2 should be deleted
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id1, title: "keep updated", visits: 10}
+        ], on: [:id], on_not_matched_by_source: :delete)
+
+      posts = TestRepo.all(Post)
+      assert [%{id: ^id1, title: "keep updated"}] = posts
+    end
+
+    test "full sync: update matched, insert new, delete missing" do
+      TestRepo.insert!(%Post{title: "update me", visits: 1})
+      TestRepo.insert!(%Post{title: "delete me", visits: 2})
+      [%{id: id_del}, %{id: id_upd}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id_upd, title: "updated", visits: 10},
+          %{id: -1, title: "new row", visits: 42}
+        ], on: [:id],
+           on_not_matched: :insert,
+           on_not_matched_by_source: :delete)
+
+      posts = TestRepo.all(from p in Post, order_by: p.title, select: p)
+      assert [%{title: "new row", visits: 42}, %{title: "updated", visits: 10}] = posts
+      # "delete me" is gone
+      assert is_nil(TestRepo.get(Post, id_del))
+    end
+
+    test "conditional not matched by source with dynamic" do
+      TestRepo.insert!(%Post{title: "active", visits: 10, public: true})
+      TestRepo.insert!(%Post{title: "inactive", visits: 0, public: false})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      # Only delete unmatched rows where public is false
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: -1, title: "dummy", visits: 0}
+        ], on: [:id], on_not_matched_by_source: [
+          {dynamic([t], t.public == false), :delete},
+          :do_nothing
+        ])
+
+      posts = TestRepo.all(Post)
+      # "active" (public=true) survives, "inactive" (public=false) deleted
+      assert [%{id: ^id1, title: "active"}] = posts
+    end
+
+    test "update unmatched by source with expression" do
+      TestRepo.insert!(%Post{title: "in source", visits: 10})
+      TestRepo.insert!(%Post{title: "not in source", visits: 20})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      # Set visits to 0 for rows not in source
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id1, title: "in source", visits: 10}
+        ], on: [:id], on_not_matched_by_source: [
+          {nil, updates: [set: [visits: 0]]}
+        ])
+
+      post1 = TestRepo.get!(Post, id1)
+      post2 = TestRepo.get!(Post, id2)
+      assert post1.visits == 10
+      assert post2.visits == 0
+    end
+  end
 end
