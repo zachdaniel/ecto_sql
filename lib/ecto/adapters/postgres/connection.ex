@@ -380,9 +380,20 @@ if Code.ensure_loaded?(Postgrex) do
       [" WHEN NOT MATCHED THEN INSERT (", col_names, ") VALUES (", values, ?)]
     end
 
-    # TODO: support planned query expressions as conditions via dynamic/2
     defp merge_condition(nil), do: []
     defp merge_condition({:unsafe_fragment, fragment}), do: [" AND " | fragment]
+
+    defp merge_condition({:planned, query, _dump_params}) do
+      # Render the WHERE expressions with source 0 aliased to "v" (VALUES source)
+      sources = create_names(query, [])
+      {expr, _name, schema} = elem(sources, 0)
+      sources = put_elem(sources, 0, {expr, "v", schema})
+
+      case query.wheres do
+        [] -> []
+        wheres -> boolean(" AND", wheres, sources, query)
+      end
+    end
 
     defp merge_returning([]), do: []
 

@@ -306,5 +306,80 @@ defmodule Ecto.Integration.MergeTest do
       posts = TestRepo.all(from p in Post, order_by: p.title, select: p)
       assert [%{title: "new post", visits: 42}, %{title: "updated", visits: 100}] = posts
     end
+
+    test "dynamic condition on VALUES column" do
+      TestRepo.insert!(%Post{title: "old", visits: 5})
+      [%{id: id}] = TestRepo.all(from p in Post, select: p)
+
+      # dynamic references binding 0 = VALUES source (v)
+      condition = dynamic([v], v.visits > 10)
+
+      # visits=3 doesn't match condition, falls through to do_nothing
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id, title: "nope", visits: 3}
+        ], on: [:id], when_matched: [
+          {condition, update: [:title, :visits]},
+          :do_nothing
+        ])
+
+      post = TestRepo.get!(Post, id)
+      assert post.title == "old"
+
+      # visits=20 matches condition
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id, title: "yes!", visits: 20}
+        ], on: [:id], when_matched: [
+          {condition, update: [:title, :visits]},
+          :do_nothing
+        ])
+
+      post = TestRepo.get!(Post, id)
+      assert post.title == "yes!"
+      assert post.visits == 20
+    end
+
+    test "dynamic condition with interpolated value" do
+      TestRepo.insert!(%Post{title: "row1", visits: 10})
+      TestRepo.insert!(%Post{title: "row2", visits: 20})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      threshold = 15
+
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id1, title: "row1 updated", visits: 10},
+          %{id: id2, title: "row2 updated", visits: 20}
+        ], on: [:id], when_matched: [
+          {dynamic([v], v.visits > ^threshold), update: [:title]},
+          :do_nothing
+        ])
+
+      posts = TestRepo.all(from p in Post, order_by: p.title, select: p)
+      # row1 (visits=10) doesn't match threshold=15, row2 (visits=20) does
+      assert [%{title: "row1"}, %{title: "row2 updated"}] = posts
+    end
+
+    test "dynamic expression groups for per-row atomics" do
+      TestRepo.insert!(%Post{title: "row1", visits: 10})
+      TestRepo.insert!(%Post{title: "row2", visits: 20})
+      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      # Use counter as the expression group discriminator
+      {_count, nil} =
+        TestRepo.merge_all(Post, [
+          %{id: id1, title: "row1", visits: 5, counter: 1},
+          %{id: id2, title: "row2", visits: 0, counter: 2}
+        ], on: [:id], when_matched: [
+          {dynamic([v], v.counter == 1),
+            update: [:title], updates: [inc: [visits: 5]]},
+          {dynamic([v], v.counter == 2),
+            update: [:title], updates: [set: [visits: 0]]}
+        ])
+
+      posts = TestRepo.all(from p in Post, order_by: p.title, select: p)
+      assert [%{title: "row1", visits: 15}, %{title: "row2", visits: 0}] = posts
+    end
   end
 end
