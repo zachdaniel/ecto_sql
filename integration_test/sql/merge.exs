@@ -204,6 +204,29 @@ defmodule Ecto.Integration.MergeTest do
       [insert_row] = Enum.filter(rows, fn [action, _, _] -> action == "INSERT" end)
       assert Enum.at(insert_row, 2) == "inserted"
     end
+
+    test "dynamic expression in returning loads into virtual field" do
+      TestRepo.insert!(%Post{title: "existing", visits: 1})
+      [%{id: id}] = TestRepo.all(from p in Post, select: p)
+
+      # Use :temp (virtual field) to receive merge_action()
+      {_count, [updated, inserted]} =
+        TestRepo.merge_all(Post, [
+          %{id: id, title: "updated", visits: 10},
+          %{id: -1, title: "inserted", visits: 20}
+        ],
+          on: [:id],
+          on_not_matched: :insert,
+          returning: [:id, :title, temp: dynamic([], fragment("merge_action()"))]
+        )
+
+      assert updated.id == id
+      assert updated.title == "updated"
+      assert updated.temp == "UPDATE"
+
+      assert inserted.title == "inserted"
+      assert inserted.temp == "INSERT"
+    end
   end
 
   describe "when_matched" do

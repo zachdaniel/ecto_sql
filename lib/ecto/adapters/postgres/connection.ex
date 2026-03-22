@@ -402,9 +402,16 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp merge_returning(returning) do
       cols =
-        Enum.map_intersperse(returning, ", ", fn col ->
-          quoted = quote_name(col)
-          ["t." | quoted]
+        Enum.map_intersperse(returning, ", ", fn
+          {:planned_expr, field, query} ->
+            # Render the select expression from the planned query
+            sources = create_names(query, [])
+            %{expr: expr} = query.select
+            [expr(expr, sources, query), " AS " | quote_name(field)]
+
+          col ->
+            quoted = quote_name(col)
+            ["t." | quoted]
         end)
 
       [" RETURNING " | cols]
