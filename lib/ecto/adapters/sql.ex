@@ -1049,10 +1049,17 @@ defmodule Ecto.Adapters.SQL do
       ) do
     %{source: source, prefix: prefix} = schema_meta
 
-    {rows, params} = unzip_inserts(header, rows)
+    {rows, source_params} =
+      case Keyword.get(opts, :source_query) do
+        {_query, dump_params} ->
+          {[], dump_params}
+
+        nil ->
+          {unzipped_rows, values_params} = unzip_inserts(header, rows)
+          {unzipped_rows, Enum.reverse(values_params)}
+      end
 
     # Collect dump_params from conditions and update_queries in clause order.
-    # Within each clause: condition params come before update params.
     clause_params =
       Enum.flat_map(when_matched, &collect_clause_params/1)
 
@@ -1071,7 +1078,7 @@ defmodule Ecto.Adapters.SQL do
         opts
       end
 
-    all_params = placeholders ++ Enum.reverse(params) ++ clause_params ++ not_matched_by_source_params
+    all_params = placeholders ++ source_params ++ clause_params ++ not_matched_by_source_params
 
     # TODO: Postgrex does not yet parse the "MERGE N" command tag,
     # so num_rows will be 0 when RETURNING is not used.

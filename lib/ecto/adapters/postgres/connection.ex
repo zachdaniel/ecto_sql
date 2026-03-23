@@ -302,11 +302,21 @@ if Code.ensure_loaded?(Postgrex) do
 
     @impl true
     def merge(prefix, table, header, rows, on, when_matched, on_not_matched, returning, placeholders, opts) do
-      counter_offset = length(placeholders) + 1
-      header_types = Keyword.get(opts, :header_types, %{})
+      using_clause =
+        case Keyword.get(opts, :source_query) do
+          {query, _dump_params} ->
+            # Source is a subquery
+            column_defs = quote_names(header)
+            [?(, all(query), ") AS v(", column_defs, ?)]
 
-      values = merge_values(rows, counter_offset, header, header_types)
-      column_defs = quote_names(header)
+          nil ->
+            # Source is inline VALUES
+            counter_offset = length(placeholders) + 1
+            header_types = Keyword.get(opts, :header_types, %{})
+            values = merge_values(rows, counter_offset, header, header_types)
+            column_defs = quote_names(header)
+            ["(VALUES ", values, ") AS v(", column_defs, ?)]
+        end
 
       on_clause =
         Enum.map_intersperse(on, " AND ", fn col ->
@@ -327,11 +337,9 @@ if Code.ensure_loaded?(Postgrex) do
       [
         "MERGE INTO ",
         quote_name(prefix, table),
-        " AS t USING (VALUES ",
-        values,
-        ") AS v(",
-        column_defs,
-        ") ON ",
+        " AS t USING ",
+        using_clause,
+        " ON ",
         on_clause,
         matched_clauses,
         not_matched_clause,
@@ -362,7 +370,12 @@ if Code.ensure_loaded?(Postgrex) do
             {expr, _name, schema} = elem(sources, 0)
             sources = put_elem(sources, 0, {expr, "t", schema})
             expr_fields = update_fields(query, sources)
-            if expr_fields == [], do: [], else: [", " | expr_fields]
+
+            cond do
+              expr_fields == [] -> []
+              value_cols == [] -> expr_fields
+              true -> [", " | expr_fields]
+            end
 
           nil ->
             []

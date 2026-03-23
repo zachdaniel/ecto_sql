@@ -444,9 +444,9 @@ defmodule Ecto.Integration.MergeTest do
     test "delete target rows not in source" do
       TestRepo.insert!(%Post{title: "keep", visits: 1})
       TestRepo.insert!(%Post{title: "remove", visits: 2})
-      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+      [%{id: id1}, _] = TestRepo.all(from p in Post, order_by: p.title, select: p)
 
-      # Only id1 is in the source — id2 should be deleted
+      # Only id1 is in the source — the other should be deleted
       {_count, nil} =
         TestRepo.merge_all(Post, [
           %{id: id1, title: "keep updated", visits: 10}
@@ -478,7 +478,7 @@ defmodule Ecto.Integration.MergeTest do
     test "conditional not matched by source with dynamic" do
       TestRepo.insert!(%Post{title: "active", visits: 10, public: true})
       TestRepo.insert!(%Post{title: "inactive", visits: 0, public: false})
-      [%{id: id1}, %{id: id2}] = TestRepo.all(from p in Post, order_by: p.title, select: p)
+      [%{id: id1}, _] = TestRepo.all(from p in Post, order_by: p.title, select: p)
 
       # Only delete unmatched rows where public is false
       {_count, nil} =
@@ -511,6 +511,46 @@ defmodule Ecto.Integration.MergeTest do
       post2 = TestRepo.get!(Post, id2)
       assert post1.visits == 10
       assert post2.visits == 0
+    end
+  end
+
+  describe "source query" do
+    test "merge using a query as source" do
+      # Create two posts: one target, one source
+      TestRepo.insert!(%Post{title: "target", visits: 1})
+      TestRepo.insert!(%Post{title: "source", visits: 99})
+      TestRepo.all(from p in Post, order_by: p.title, select: p)
+
+      source_query = from p in Post,
+        select: %{id: p.id, title: p.title, visits: p.visits}
+
+      {_count, nil} =
+        TestRepo.merge_all(Post, source_query,
+          on: [:id],
+          update: [:visits],
+          updates: [set: [title: "merged"]])
+
+      posts = TestRepo.all(from p in Post, order_by: p.id, select: p)
+      assert [%{title: "merged"}, %{title: "merged"}] = posts
+    end
+
+    test "merge from source query with returning" do
+      TestRepo.insert!(%Post{title: "original", visits: 5})
+      [%{id: id}] = TestRepo.all(from p in Post, select: p)
+
+      source_query = from p in Post,
+        where: p.id == ^id,
+        select: %{id: p.id, title: p.title, visits: p.visits}
+
+      {_count, [returned]} =
+        TestRepo.merge_all(Post, source_query,
+          on: [:id],
+          update: [],
+          updates: [set: [title: "via query"]],
+          returning: [:id, :title])
+
+      assert returned.id == id
+      assert returned.title == "via query"
     end
   end
 end
